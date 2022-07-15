@@ -3,7 +3,7 @@ import sklearn.linear_model
 import time
 from sarpu.PUmodels import *
 
-
+EPS = 1e-4
 
 def pu_learn_sar_e(x, s, e, classification_model=None, classification_attributes=None):
     start = time.time()
@@ -67,7 +67,9 @@ def pu_learn_sar_em(x,
                  slope_eps=0.0001,
                  ll_eps=0.0001,
                  convergence_window=10,
-                 refit_classifier=True
+                 refit_classifier=True,
+                 verbose=False,
+                 log_prefix=''
                  ):
 
     start = time.time()
@@ -90,6 +92,8 @@ def pu_learn_sar_em(x,
 
     expected_prior_y1 = classification_model.predict_proba(x)
     expected_propensity = propensity_model.predict_proba(x)
+    expected_prior_y1 = np.clip(expected_prior_y1, EPS, 1 - EPS) # to avoid numerical problems
+    expected_propensity = np.clip(expected_propensity, EPS, 1 - EPS) # to avoid numerical problems
     expected_posterior_y1 = expectation_y(expected_prior_y1, expected_propensity, s)
 
     # loglikelihood
@@ -102,7 +106,7 @@ def pu_learn_sar_em(x,
     max_ll_improvements = []
 
     i=0
-    for i in range(max_its):
+    for i in range(max_its):        
         #maximization
         propensity_model.fit(x, s, sample_weight=expected_posterior_y1)
 
@@ -114,6 +118,8 @@ def pu_learn_sar_em(x,
         # expectation
         expected_prior_y1 = classification_model.predict_proba(x)
         expected_propensity = propensity_model.predict_proba(x)
+        expected_prior_y1 = np.clip(expected_prior_y1, EPS, 1 - EPS) # to avoid numerical problems
+        expected_propensity = np.clip(expected_propensity, EPS, 1 - EPS) # to avoid numerical problems
         expected_posterior_y1 = expectation_y(expected_prior_y1, expected_propensity, s)
 
 
@@ -129,8 +135,15 @@ def pu_learn_sar_em(x,
             average_abs_slope = np.average(np.abs(slope(past_propensities, axis=1)))
             propensity_slope.append(average_abs_slope)
             if average_abs_slope<slope_eps and max_ll_improvement < ll_eps:
+                if verbose:
+                    print(f'{log_prefix}Converged')
                 break #converged
-
+            if verbose and (i + 1) % 1 == 0:
+                print(f'{log_prefix}Iter {i + 1}/{max_its}, time: {time.time()-start:.1f}s, average_abs_slope: {average_abs_slope:.4f}, max_ll_improvement: {max_ll_improvement:.4f}')
+        else:
+            if verbose and (i + 1) % 1 == 0:
+                print(f'{log_prefix}Iter {i + 1}/{max_its}, time: {time.time()-start:.1f}s')
+    
     if refit_classifier:
         classification_model.fit(x,s,e=expected_propensity)
 
@@ -162,9 +175,12 @@ def expectation_y(expectation_f,expectation_e, s):
 def loglikelihood_probs(class_probabilities, propensity_scores, labels):
     prob_labeled = class_probabilities*propensity_scores
     prob_unlabeled_pos = class_probabilities*(1-propensity_scores)
+    prob_unlabeled_pos = np.clip(prob_unlabeled_pos, EPS, 1 - EPS) # introduced to avoid numerical problems in log later
     prob_unlabeled_neg = 1-class_probabilities
+    prob_unlabeled_neg = np.clip(prob_unlabeled_neg, EPS, 1 - EPS) # introduced to avoid numerical problems in log later
     prob_pos_given_unl = prob_unlabeled_pos/(prob_unlabeled_pos+prob_unlabeled_neg)
     prob_neg_given_unl = 1-prob_pos_given_unl
+
     return (
         labels*np.log(prob_labeled)+
         (1-labels)*(
